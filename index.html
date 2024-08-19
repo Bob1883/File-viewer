@@ -57,6 +57,7 @@
         let isPanning = false;
         let panOffset = { x: 0, y: 0 };
         let lastPanPosition = null;
+        let lastTouchDistance = null;
         const pdfContainer = document.getElementById('pdf-container');
 
         pdfjsLib.getDocument(pdfUrl).promise.then(pdf => {
@@ -65,24 +66,37 @@
             updateNavButtons();
         });
 
-        function renderPage(pageNum) {
-            pdfDoc.getPage(pageNum).then(page => {
-                const viewport = page.getViewport({ scale: scale });
-                const canvas = document.createElement('canvas');
-                const context = canvas.getContext('2d');
-                canvas.height = viewport.height;
-                canvas.width = viewport.width;
+        async function renderPage(pageNum) {
+            const page = await pdfDoc.getPage(pageNum);
+            const viewport = page.getViewport({ scale: 1 });
+            const pdfWidth = viewport.width;
+            const pdfHeight = viewport.height;
 
-                const renderContext = {
-                    canvasContext: context,
-                    viewport: viewport
-                };
-                page.render(renderContext);
+            const containerWidth = pdfContainer.offsetWidth;
+            const containerHeight = pdfContainer.offsetHeight;
 
-                pdfContainer.innerHTML = '';
-                pdfContainer.appendChild(canvas);
-                updateTransform();
-            });
+            const fitScale = Math.min(containerWidth / pdfWidth, containerHeight / pdfHeight);
+
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+
+            const pixelRatio = window.devicePixelRatio || 1;
+            const scaleFactor = 3;
+            canvas.height = pdfHeight * fitScale * pixelRatio * scaleFactor;
+            canvas.width = pdfWidth * fitScale * pixelRatio * scaleFactor;
+            canvas.style.height = `${pdfHeight * fitScale}px`;
+            canvas.style.width = `${pdfWidth * fitScale}px`;
+
+            const renderContext = {
+                canvasContext: context,
+                viewport: page.getViewport({ scale: fitScale * pixelRatio * scaleFactor }),
+            };
+
+            pdfContainer.innerHTML = '';
+            pdfContainer.appendChild(canvas);
+
+            await page.render(renderContext);
+            updateTransform();
         }
 
         function updateNavButtons() {
@@ -112,10 +126,12 @@
 
         pdfContainer.addEventListener('wheel', (e) => {
             e.preventDefault();
-            const zoomFactor = 1.1;
-            scale = e.deltaY < 0 ? scale * zoomFactor : scale / zoomFactor;
-            scale = Math.min(Math.max(0.5, scale), 10);
-            renderPage(currentPage);
+            if (e.ctrlKey) {
+                const zoomFactor = 1.1;
+                scale = e.deltaY < 0 ? scale * zoomFactor : scale / zoomFactor;
+                scale = Math.min(Math.max(0.5, scale), 10);
+                updateTransform();
+            }
         });
 
         pdfContainer.addEventListener('mousedown', (e) => {
@@ -139,7 +155,14 @@
         });
 
         pdfContainer.addEventListener('touchstart', (e) => {
-            if (e.touches.length === 1) {
+            if (e.touches.length === 2) {
+                const touch1 = e.touches[0];
+                const touch2 = e.touches[1];
+                lastTouchDistance = Math.hypot(
+                    touch1.clientX - touch2.clientX,
+                    touch1.clientY - touch2.clientY
+                );
+            } else if (e.touches.length === 1) {
                 isPanning = true;
                 lastPanPosition = {
                     x: e.touches[0].clientX,
@@ -150,7 +173,23 @@
 
         pdfContainer.addEventListener('touchmove', (e) => {
             e.preventDefault();
-            if (e.touches.length === 1 && isPanning) {
+            if (e.touches.length === 2) {
+                const touch1 = e.touches[0];
+                const touch2 = e.touches[1];
+                const currentDistance = Math.hypot(
+                    touch1.clientX - touch2.clientX,
+                    touch1.clientY - touch2.clientY
+                );
+
+                if (lastTouchDistance !== null) {
+                    const zoomFactor = currentDistance / lastTouchDistance;
+                    scale *= zoomFactor;
+                    scale = Math.min(Math.max(0.5, scale), 10);
+                    updateTransform();
+                }
+
+                lastTouchDistance = currentDistance;
+            } else if (e.touches.length === 1 && isPanning) {
                 const currentPosition = {
                     x: e.touches[0].clientX,
                     y: e.touches[0].clientY
@@ -166,6 +205,7 @@
         });
 
         pdfContainer.addEventListener('touchend', () => {
+            lastTouchDistance = null;
             isPanning = false;
         });
 
